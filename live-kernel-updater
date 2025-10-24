@@ -1083,7 +1083,7 @@ update_live() { [ "$DEVICE" = 'live' ] ; return $? ; }
 #------------------------------------------------------------------------------
 count_kernels() {
     local dir=$1
-    count_lines "$($VM_VERSION_PROG -nsr /boot)"
+    count_lines "$($VM_VERSION_PROG -nsr /boot |sed /Memtest/Id)"
 }
 
 
