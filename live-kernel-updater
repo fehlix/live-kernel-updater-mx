@@ -694,7 +694,7 @@ main() {
             local mod_file=$WORK_DIR/modules.list
             echo "$MODS" | sed -r "s/[ ,]+/\n/g" > $mod_file
             copy_modules "$root_dir" "$initrd_dir" "$current_versions" "$mod_file"
-
+            need copy-programs && copy_programs "$root_dir"  "$initrd_dir"
         elif [ "$initrd_only" ]; then
             delete_all_modules $initrd_dir
             copy_modules  "$root_dir"  "$initrd_dir"  "$current_versions"
@@ -702,6 +702,7 @@ main() {
         else
             [ "$KEEP_OLD" ] || remove_old_mods $initrd_dir $target_version
             copy_modules "$root_dir" "$initrd_dir" "$new_version"
+            need copy-programs && copy_programs "$root_dir"  "$initrd_dir"
         fi
     fi
 
