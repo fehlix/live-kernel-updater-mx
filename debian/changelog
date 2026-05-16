@@ -1,3 +1,44 @@
+live-kernel-updater (0.2.30+11) mx; urgency=medium
+
+  [ MX multi-kernel mode ]
+  * Add per-kernel initrd support (MULTI_KERNEL): each vmlinuzN gets its
+    own initrdN.gz; auto-detected from /etc/mx-version presence.
+  * Add --multi-kernel / --shared-initrd CLI flags to override detection.
+  * Add kernel actions for each vmlinuzN: Add (to next free vmlinuzN),
+    Reassign to a different kernel, Remove.
+  * Write vmlinuzN.ver version files for GRUB after kernel updates.
+  * Warn when syslinux cfg still references shared initrd.gz in
+    multi-kernel mode; list affected cfg files.
+  * No .kold/.iold backups in MX mode; each vmlinuzN is its own rollback.
+  * antiX shared-initrd mode (single initrd.gz for vmlinuz + vmlinuz1)
+    unchanged; full backward compatibility maintained.
+
+  [ Early microcode ]
+  * Add early microcode update (uc-tool) applied after every initrd repack.
+  * Add --no-ucode / -U flag to skip microcode update.
+
+  [ Kernel and initrd handling ]
+  * Fix shared-initrd mode: initrd rebuild includes modules for all
+    active kernels.
+  * Fix initrd-only update incorrectly including .kold backup kernel modules.
+  * Fix LUKS encrypted USB: initrd update menu entry was suppressed by
+    an obsolete guard; crypto programs are now correctly added.
+  * Use squashfs template initrd when updating external USB, for correct
+    distro/version match.
+  * Support directory argument for --device (pre-mounted live USB).
+
+  [ User interface ]
+  * Add --live-dir option to specify live subdirectory non-interactively.
+  * Mark currently running kernel (*) in vmlinuzN action menu (live mode only).
+  * Mark currently installed vmlinuzN (*) in kernel picker list.
+  * Enhance kernel build date detection with multi-format parsing
+    and mtime fallback.
+  * Sort available kernel list by version descending, date descending.
+  * Offer restart after every operation instead of exiting to terminal.
+  * Fix quit/cancel from menus closing the terminal on desktop launch.
+
+ -- fehlix <fehlix@mxlinux.org>  Sat, 16 May 2026 17:46:59 -0400
+
 live-kernel-updater (0.2.30+10) mx; urgency=medium
 
   * if encrypted live media found, also copy encryption programs to initrd
