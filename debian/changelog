@@ -1,3 +1,13 @@
+live-kernel-updater (0.2.30+12) mx; urgency=medium
+
+  - Mark current kernel with * prefix in kernel selection list
+  - Mark running live kernel with * in action menu (update and remove entries)
+  - Warn before update or remove when the running live kernel would be removed
+  - Detect kernels uninstalled under root persistence and mark with ? in action menu
+  - Add legend explaining * (running kernel) and ? (uninstalled under persistence) markers
+
+ -- fehlix <fehlix@mxlinux.org>  Sun, 17 May 2026 19:28:45 -0400
+
 live-kernel-updater (0.2.30+11) mx; urgency=medium
 
   [ MX multi-kernel mode ]
