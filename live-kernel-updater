@@ -13,8 +13,8 @@
 #      VERSION="2.30.04-2302"
 # VERSION_DATE="Sat, 25 Feb 2023 12:45:10 -0500"
 
-      VERSION="2.30.04-260517"
- VERSION_DATE="Sun, 17 May 2026 19:28:45 -0400"
+      VERSION="26.05.1"
+ VERSION_DATE="Sun, 18 May 2026 00:00:00 +0000"
 
         ME="live-kernel-updater"
     MY_DIR=$(dirname "$(readlink -f $0)")
@@ -532,7 +532,6 @@ Commands:
    install     Copy new initrd and vmlinuz to the live boot directory
 
 Options:
-  -a --auto             Non-interactive.  Always assume the safe answer
   -C --color=<xxx>      Set color scheme to off|low|low1|bw|dark|high
   -d --device=<device>  live-usb device to update the kernel on
                         (use "live" to force updating a running live system)
@@ -554,18 +553,18 @@ Options:
   -m --modules=<list>   Only add listed modules to the existing initrd
   -N --numeric-ui       Use the legacy numerical user interface
      --no-ucode         Skip microcode refresh in the repacked initrd
-  -U                    Same as --no-ucode
+  -U                   Same as --no-ucode
      --live-dir=<dir>   Subdir holding live boot files (normally "antiX"); skips auto-detection
      --multi-kernel     Force per-kernel initrd mode (one initrd per kernel slot)
      --shared-initrd    Force shared initrd mode (one initrd shared by vmlinuz + vmlinuz1)
      --pause            Wait for user input before exiting
   -p --pretend          Don't actually install the new kernel or initrd.gz
   -q --quiet            Print less
-  -R --reset-config     Write fresh config file with default options
+  -R --reset-config     Write a config template (all entries commented out) and exit
   -v --version          Show version information
   -V --verbose          Print more, show output of commands
   -VV --very-verbose    Also show the commands
-  -W --write-config     Write/update config file preserving current options
+  -W --write-config     Write a config template (all entries commented out) and exit
 
 Notes:
   - short options stack. Example: -pq instead of --pretend --quiet
@@ -595,7 +594,7 @@ eval_argument() {
        --graphic-ui|G)  GRAPHICAL_MENUS=true            ;;
               -help|h)  usage                           ;;
             -initrd|i)  CMD_INITRD=$TEMPLATE_INITRD     ;;
-            -initrd=*)  CMD_INITRD=${arg#*=}            ;;
+            -initrd=*)  CMD_INITRD=${arg#*=}; CMD_INITRD_EXPLICIT=true ;;
             -kernel|k)  NEW_KERNEL=$val                 ;;
             -kernel=*)  NEW_KERNEL=$val                 ;;
           -keep-old|K)  KEEP_OLD=true                   ;;
@@ -664,7 +663,7 @@ takes_param() {
 # The main routine.  Called from the very bottom of this script.
 #------------------------------------------------------------------------------
 main() {
-    local SHIFT SHORT_STACK="aCdDFGhiIkKmNpqRUvVW"
+    local SHIFT SHORT_STACK="CdDFGhiIkKmNpqRUvVW"
     local BE_VERBOSE VERY_VERBOSE VERBOSITY=0
     local orig_args="$*"
 
@@ -698,8 +697,13 @@ main() {
 
     local new_initrd
     if [ ${#CMD_INITRD} -gt 0 ]; then
-        test -f "$CMD_INITRD" || fatal "The initrd file %s was not found" "$CMD_INITRD"
-        new_initrd=true
+        if multi_kernel && [ -z "$CMD_INITRD_EXPLICIT" ]; then
+            warn $"-i/--initrd option is not supported in multi-kernel mode, ignoring"
+            CMD_INITRD=""
+        else
+            test -f "$CMD_INITRD" || fatal "The initrd file %s was not found" "$CMD_INITRD"
+            multi_kernel || new_initrd=true
+        fi
     fi
 
     local template_initrd=${CMD_INITRD:=$TEMPLATE_INITRD}
@@ -896,7 +900,8 @@ main() {
     # the host template may be from a different/older release.
     # When live-booted and updating the running system, keep the host template --
     # it may be newer than the squashfs if the package was updated in the live session.
-    if [ -z "$new_initrd" ] && ! update_live; then
+    # A user-supplied --initrd=file is never overridden.
+    if [ -z "$new_initrd" ] && [ -z "$CMD_INITRD_EXPLICIT" ] && ! update_live; then
         local t
         for t in "$TEMPLATE_INITRD_1" "$TEMPLATE_INITRD_2"; do
             test -f "$root_dir$t" && template_initrd="$root_dir$t" && break
@@ -904,7 +909,7 @@ main() {
     fi
     # Fallback: host template not found (e.g. package not installed on live system)
     # -- try inside the mounted squashfs regardless of update_live
-    if [ -z "$new_initrd" ] && ! test -f "$template_initrd"; then
+    if [ -z "$new_initrd" ] && [ -z "$CMD_INITRD_EXPLICIT" ] && ! test -f "$template_initrd"; then
         local t
         for t in "$TEMPLATE_INITRD_1" "$TEMPLATE_INITRD_2"; do
             test -f "$root_dir$t" && template_initrd="$root_dir$t" && break
@@ -1157,8 +1162,12 @@ main() {
     #==============================================================================
     # The Second Menu (if needed, no --initrd  and no --modules)
     #==============================================================================
+    if multi_kernel && [ -n "$NEW_KERNEL" ]; then
+        warn $"-k/--kernel option is not supported in multi-kernel mode, ignoring"
+        NEW_KERNEL=""
+    fi
     local action_target
-    if [ ${#MODS} -gt 0 ]; then
+    if ! multi_kernel && [ ${#MODS} -gt 0 ]; then
         action_target="modules@$MODS"
     elif [ "$new_initrd" ];then
         action_target=initrd@$CMD_INITRD
@@ -1188,7 +1197,7 @@ main() {
         # kernel in both slots is pointless and makes rollback a no-op).
         # Multi-kernel mode: offer all -- slots are independent.
         local _update_pool; multi_kernel && _update_pool="$boot_all" || _update_pool="$boot_new"
-        select_new_kernel new_kernel "$NEW_KERNEL" "$_update_pool" "$target_version"
+        select_new_kernel new_kernel "$NEW_KERNEL" "$_update_pool" "$target_version" $"kernel being replaced"
 
         new_fname=$(get_kernel_fname "$new_kernel")
         new_version=$(get_kernel_version "$new_kernel")
@@ -1197,9 +1206,27 @@ main() {
             || fatal "Missing modules directory for kernel %s" "$new_version"
 
         # Current kernel and New/Old kernel specs
+        # Multi-kernel: no .kold backup (do_install_direct); shared: backup shown
+        local _kold_dest; multi_kernel || _kold_dest="$target_fname$KOLD_EXT"
         blurb=$(kernel_stats \
-            $"Current" "$target_version" "$target_date" "$target_fname" "$target_fname$KOLD_EXT" \
+            $"Current" "$target_version" "$target_date" "$target_fname" "$_kold_dest" \
             $"New"     "$new_version"    "$new_date"    $"(new)"        "$target_fname")
+        if multi_kernel && [ -n "$CMD_INITRD_EXPLICIT" ]; then
+            local _lbl_initrd=$"Using initrd template"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_initrd" "$(pq "$CMD_INITRD")")"
+            action_name=$"live kernel update with initrd template"
+        fi
+        if multi_kernel && [ -n "$MODS" ]; then
+            local _lbl_mods=$"Add modules"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_mods" "$(pq "$MODS")")"
+            if [ -n "$CMD_INITRD_EXPLICIT" ]; then
+                action_name=$"live kernel update with initrd template and modules"
+            else
+                action_name=$"live kernel update with modules"
+            fi
+        fi
 
     #---- Rollback Action ---------------------------------------------------------
     elif [ "$action" = "rollback" ]; then
@@ -1249,21 +1276,38 @@ main() {
         target=$(find_kernel_fname "$target_fname" "$live_vm")
         local target_version=$(get_kernel_version "$target")
         local target_date=$(get_kernel_date "$target")
-        select_new_kernel new_kernel "$NEW_KERNEL" "$boot_all" "$target_version"
+        select_new_kernel new_kernel "$NEW_KERNEL" "$boot_all" "$target_version" $"kernel being replaced"
         new_fname=$(get_kernel_fname "$new_kernel")
         new_version=$(get_kernel_version "$new_kernel")
         new_date=$(get_kernel_date "$new_kernel")
         test -d $root_dir/lib/modules/$new_version \
             || fatal "Missing modules directory for kernel %s" "$new_version"
+        local _kold_dest; multi_kernel || _kold_dest="$target_fname$KOLD_EXT"
         blurb=$(kernel_stats \
-            $"Current" "$target_version" "$target_date" "$target_fname" "$target_fname$KOLD_EXT" \
+            $"Current" "$target_version" "$target_date" "$target_fname" "$_kold_dest" \
             $"New"     "$new_version"    "$new_date"    $"(new)"        "$target_fname")
+        if multi_kernel && [ -n "$CMD_INITRD_EXPLICIT" ]; then
+            local _lbl_initrd=$"Using initrd template"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_initrd" "$(pq "$CMD_INITRD")")"
+            action_name=$"live kernel reassign with initrd template"
+        fi
+        if multi_kernel && [ -n "$MODS" ]; then
+            local _lbl_mods=$"Add modules"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_mods" "$(pq "$MODS")")"
+            if [ -n "$CMD_INITRD_EXPLICIT" ]; then
+                action_name=$"live kernel reassign with initrd template and modules"
+            else
+                action_name=$"live kernel reassign with modules"
+            fi
+        fi
 
     elif [ "$action" = "add" ]; then
         action_name=$"live kernel add"
         local _add_mark=""
         update_live && _add_mark=$(uname -r)
-        select_new_kernel new_kernel "$NEW_KERNEL" "$boot_all" "$_add_mark"
+        select_new_kernel new_kernel "$NEW_KERNEL" "$boot_all" "$_add_mark" $"running live kernel"
         new_fname=$(get_kernel_fname "$new_kernel")
         new_version=$(get_kernel_version "$new_kernel")
         new_date=$(get_kernel_date "$new_kernel")
@@ -1271,6 +1315,22 @@ main() {
             || fatal "Missing modules directory for kernel %s" "$new_version"
         blurb=$(printf "${m_co}%s %s: %s ($date_co%s$nc_co)" \
             $"Add new kernel to" "$(pq "$target_fname")" "$(vq "$new_version")" "$new_date")
+        if [ -n "$CMD_INITRD_EXPLICIT" ]; then
+            local _lbl_initrd=$"Using initrd template"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_initrd" "$(pq "$CMD_INITRD")")"
+            action_name=$"live kernel add with initrd template"
+        fi
+        if [ -n "$MODS" ]; then
+            local _lbl_mods=$"Add modules"
+            blurb="$blurb
+$(printf "${m_co}%s: %s${nc_co}" "$_lbl_mods" "$(pq "$MODS")")"
+            if [ -n "$CMD_INITRD_EXPLICIT" ]; then
+                action_name=$"live kernel add with initrd template and modules"
+            else
+                action_name=$"live kernel add with modules"
+            fi
+        fi
 
     elif [ "$action" = "remove" ]; then
         action_name=$"live kernel remove"
@@ -1371,7 +1431,7 @@ main() {
     copy_initrd_release "$root_dir" "$initrd_dir" "$initrd_only"
 
     if need copy-modules; then
-        if [ ${#MODS} -gt 0 ]; then
+        if ! multi_kernel && [ ${#MODS} -gt 0 ]; then
             : # Don't delete any exiting modules
             local mod_file=$WORK_DIR/modules.list
             echo "$MODS" | sed -r "s/[ ,]+/\n/g" > $mod_file
@@ -1388,6 +1448,11 @@ main() {
         elif [ "$action" = "add" ]; then
             delete_all_modules $initrd_dir
             copy_modules "$root_dir" "$initrd_dir" "$new_version"
+            if [ -n "$MODS" ]; then
+                local mod_file=$WORK_DIR/modules.list  no_banner=true
+                echo "$MODS" | sed -r "s/[ ,]+/\n/g" > $mod_file
+                copy_modules "$root_dir" "$initrd_dir" "$new_version" "$mod_file" $no_banner
+            fi
             need copy-programs && copy_programs "$root_dir" "$initrd_dir"
         else
             if multi_kernel; then
@@ -1396,6 +1461,11 @@ main() {
                 [ "$KEEP_OLD" ] || remove_old_mods $initrd_dir $target_version
             fi
             copy_modules "$root_dir" "$initrd_dir" "$new_version"
+            if multi_kernel && [ -n "$MODS" ]; then
+                local mod_file=$WORK_DIR/modules.list  no_banner=true
+                echo "$MODS" | sed -r "s/[ ,]+/\n/g" > $mod_file
+                copy_modules "$root_dir" "$initrd_dir" "$new_version" "$mod_file" $no_banner
+            fi
             # Shared mode: also keep modules for every other active slot
             if ! multi_kernel; then
                 local _shr_vers
@@ -1635,7 +1705,7 @@ select_kernel_2_marked() {
 }
 
 select_new_kernel() {
-    local var=$1  cmd_version=$2  list=$3  current_version=$4  cnt=$(count_lines "$3")
+    local var=$1  cmd_version=$2  list=$3  current_version=$4  current_label=$5  cnt=$(count_lines "$3")
 
     fatal_0 $cnt $"Did not find any new kernels in the boot directory"
 
@@ -1646,7 +1716,7 @@ select_new_kernel() {
             0) fatal "No new kernels match the requested version %s" "$cmd_version" ;;
 
             1) msg $"Found one kernel matching the requested version %s" "$(pq $cmd_version)"
-               eval "$var=\$list"
+               eval "$var=\$cmd_kernel"
                return ;;
 
             *) fatal "Found multiple kernels matching the requested version %s" "$cmd_version" ;;
@@ -1661,8 +1731,7 @@ select_new_kernel() {
 
     local BACK_TO_MAIN=$"quit"
     if [ -n "$current_version" ]; then
-        local _lbl_run=$"running live kernel"
-        msg "${hi_co}*${nc_co} ${version_co}${current_version}${nc_co}  ${m_co}${_lbl_run}${nc_co}"
+        msg "${hi_co}*${nc_co} ${version_co}${current_version}${nc_co}  ${m_co}${current_label}${nc_co}"
         select_kernel_2_marked $"Please select a kernel from this list" $var "$list" "$current_version"
     else
         select_kernel_2 $"Please select a kernel from this list" $var "$list"
@@ -1717,14 +1786,14 @@ remove_old_mods() {
 # Copy in modules directory for the new kernel
 #------------------------------------------------------------------------------
 copy_modules() {
-    local from=$1  to=$2  versions=$3  mod_file=$4
+    local from=$1  to=$2  versions=$3  mod_file=$4  no_banner=$5
 
     local options="--count --quiet --from=$from --to=$to"
     [ ${#mod_file} -gt 0 ] && options="$options --verbose"
 
     local version success
     for version in $versions; do
-        msg "  -> %s %s" $"kernel" "$(pq $version)"
+        [ -z "$no_banner" ] && msg "  -> %s %s" $"kernel" "$(pq $version)"
         if always_cmd copy-initrd-modules $options --encrypt --kernel="$version" $mod_file; then
             success=true
             continue
