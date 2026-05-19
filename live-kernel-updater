@@ -553,7 +553,7 @@ Options:
   -m --modules=<list>   Only add listed modules to the existing initrd
   -N --numeric-ui       Use the legacy numerical user interface
      --no-ucode         Skip microcode refresh in the repacked initrd
-  -U                   Same as --no-ucode
+  -U                    Same as --no-ucode
      --live-dir=<dir>   Subdir holding live boot files (normally "antiX"); skips auto-detection
      --multi-kernel     Force per-kernel initrd mode (one initrd per kernel slot)
      --shared-initrd    Force shared initrd mode (one initrd shared by vmlinuz + vmlinuz1)
