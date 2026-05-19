@@ -1,3 +1,15 @@
+live-kernel-updater (0.2.30+13) mx; urgency=medium
+
+  * Allow -m/--modules in multi-kernel mode to also add extra modules
+    to the selected vmlinuzN (normal update menu runs first)
+  * Allow --initrd=file in multi-kernel mode as initrd template for
+    the selected vmlinuzN
+  * Rewrite man page
+  * Add bash completion for all options
+  * Version string: 26.05.1
+
+ -- fehlix <fehlix@mxlinux.org>  Mon, 18 May 2026 19:42:08 -0400
+
 live-kernel-updater (0.2.30+12) mx; urgency=medium
 
   - Mark current kernel with * prefix in kernel selection list
