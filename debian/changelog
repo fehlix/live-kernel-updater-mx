@@ -1,3 +1,39 @@
+live-kernel-updater (0.2.30+14) mx; urgency=medium
+
+  * Add -e/--encrypt flag to force cryptsetup into initrd regardless of
+    boot environment (useful for testing on non-encrypted live systems)
+  * Suppress running-kernel warning when only one vmlinuzN slot exists
+  * Fix "Found one new kernel" message shown incorrectly during reassign
+    with the same kernel; now says "Found one kernel" in that case
+  * Fix live detection with toram boot parameter: remount boot device at
+    LIVE_MP so LKU detects and offers "current live system" correctly;
+    unmount on exit to restore toram state; handle device already mounted
+    elsewhere via bind mount
+  * Fix already-mounted boot device unmounted by LKU: detect existing mount
+    with findmnt and use it directly; skip umount_all; preserve mount on exit
+    (affects GIO/Thunar, KDE Plasma, and any other automounter)
+  * Remove stale -a/--auto option: caused infinite loop via offer_restart()
+    (YES_no auto-answered "yes" to "Perform another operation?" forever) and
+    would start remaster immediately without user confirmation if suggested
+  * Add sync in clean_up() before any unmount to prevent filesystem
+    corruption on unclean unmount
+  * Fix defrag: include initrdN.gz files; exclude .md5, .ver, .kold and
+    other small/backup files (kernels and initrds only)
+  * Fix offer_restart() arg replay: expand stacked short opts (e.g. -VVd)
+    into UNPACKED_ARGS at startup so -d/--device stripping works correctly
+    regardless of how args were originally combined
+  * Review and adjust man page: replace -G/--graphic-ui description with
+    "interactive terminal menu with keyboard navigation"
+  * Update bash completion: add -e/--encrypt
+  * Rewrite initrd_modules_ver(): use last TRAILER!!! boundary directly
+    (grep -boa + tail -1) instead of looping all boundaries; detect
+    compression format from magic bytes (kernel lib/decompress.c source)
+    instead of trying all decompressors; add lzma support; emit explicit
+    warning on unknown format or missing decompressor instead of silent
+    failure
+
+ -- fehlix <fehlix@mxlinux.org>  Thu, 21 May 2026 07:37:17 -0400
+
 live-kernel-updater (0.2.30+13) mx; urgency=medium
 
   * Allow -m/--modules in multi-kernel mode to also add extra modules

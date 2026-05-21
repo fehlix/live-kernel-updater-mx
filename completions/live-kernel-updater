@@ -4,10 +4,11 @@ _live_kernel_updater() {
     local cur prev words cword
     _init_completion || return
 
-    local short_opts="-C -d -F -G -h -i -I -k -K -m -N -p -q -R -U -v -V -W"
+    local short_opts="-C -d -e -F -G -h -i -I -k -K -m -N -p -q -R -U -v -V -W"
     local long_opts="
         --color=
         --device=
+        --encrypt
         --force=
         --graphic-ui
         --help

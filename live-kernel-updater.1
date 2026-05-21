@@ -1,4 +1,4 @@
-.TH LIVE-KERNEL-UPDATER 1 "2026-05-18" "Version 26.05.1" "antiX/MX Documentation"
+.TH LIVE-KERNEL-UPDATER 1 "2026-05-21" "Version 26.05.2" "antiX/MX Documentation"
 .nh
 .ad l
 .SH NAME
@@ -91,6 +91,11 @@ live system.  A block device path (e.g. \fI/dev/sdb1\fR) causes the tool to
 mount and update that device.  A directory path (e.g. \fI/mnt/usb\fR) is used
 directly as the live mount point without mounting.
 .TP
+\fB\-e\fR, \fB\-\-encrypt\fR
+Force \fBcryptsetup\fR to be copied into the initrd regardless of whether
+the boot environment uses disk encryption.  Useful for testing on
+non\-encrypted live systems.
+.TP
 \fB\-F\fR, \fB\-\-force=\fR\fIlist\fR
 Force one or more comma\-separated options:
 .RS
@@ -103,7 +108,8 @@ remove the previous initrd working directory before unpacking
 .RE
 .TP
 \fB\-G\fR, \fB\-\-graphic\-ui\fR
-Use the graphical (fzf\-based) menu interface.  This is the default.
+Use the interactive terminal menu interface with keyboard navigation.
+This is the default.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Show usage summary and exit.
@@ -153,9 +159,9 @@ standard kernel modules during a normal vmlinuzN update.
 Force multi\-kernel mode.  Auto\-detected as the default on MX Linux.
 .TP
 \fB\-N\fR, \fB\-\-numeric\-ui\fR
-Use the legacy numbered\-list menu interface instead of the graphical one.
+Use the legacy numbered\-list menu interface instead of the interactive one.
 .TP
-\fB\-\-no\-ucode\fR, \fB\-U\fR
+\fB\-U\fR, \fB\-\-no\-ucode\fR
 Skip microcode injection when repacking the initrd.
 .TP
 \fB\-p\fR, \fB\-\-pretend\fR
