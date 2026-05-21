@@ -13,8 +13,8 @@
 #      VERSION="2.30.04-2302"
 # VERSION_DATE="Sat, 25 Feb 2023 12:45:10 -0500"
 
-      VERSION="26.05.1"
- VERSION_DATE="Mon, 18 May 2026 19:42:08 -0400"
+      VERSION="26.05.2"
+ VERSION_DATE="Thu, 21 May 2026 07:37:17 -0400"
 
         ME="live-kernel-updater"
     MY_DIR=$(dirname "$(readlink -f $0)")
@@ -415,10 +415,14 @@ sync_slot_initrds_with_shared() {
 
 #------------------------------------------------------------------------------
 # List kernel module version(s) packed inside an initrd image.
-# Stage 1: try each decompressor directly (no microcode preamble).
-# Stage 2: scan for CPIO TRAILER!!! boundaries, try decompressors from each
-#          boundary -- handles multiple microcode CPIO streams and any
-#          compression format.  Technique from live-slot/_get_initrd_module_vers.
+# Kernel modules are always in the last compressed section.  Find the last
+# TRAILER!!! boundary via grep -boa and start reading from there; if none is
+# found (plain initrd, no microcode preamble) start from offset 0.
+# Compression type is detected from magic bytes; same source as the kernel's
+# lib/decompress.c and the format-specific lib/decompress_* files:
+#   https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/
+# Magic hex produced by: dd ... | od -A n -t x1 | tr -d ' \n'
+# Warns if format is unknown or decompressor not installed.
 # Echoes one module version per line (sort -uV); nothing on failure.
 #------------------------------------------------------------------------------
 initrd_modules_ver() {
@@ -426,32 +430,41 @@ initrd_modules_ver() {
     [ -f "$ipath" ] || return
 
     local MOD_SED='s|lib/modules/\([^/]*\).*|\1|'
-    local decomp vers
 
-    for decomp in zcat xzcat lz4cat zstdcat bzcat; do
-        command -v "$decomp" >/dev/null 2>&1 || continue
-        vers=$($decomp "$ipath" 2>/dev/null \
-            | cpio -t 2>/dev/null \
-            | grep '^lib/modules/[^/]' \
-            | sed "$MOD_SED" \
-            | sort -uV)
-        [ -n "$vers" ] && { printf '%s\n' "$vers"; return; }
-    done
+    local last_trailer bnd=0
+    last_trailer=$(grep -boa 'TRAILER!!!' "$ipath" 2>/dev/null | tail -1 | cut -d: -f1)
+    [ -n "$last_trailer" ] && bnd=$(( (last_trailer + 121 + 511) / 512 * 512 ))
 
-    local off bnd
-    while IFS=: read -r off _; do
-        bnd=$(( (off + 121 + 511) / 512 * 512 ))
-        for decomp in zcat xzcat lz4cat zstdcat bzcat; do
-            command -v "$decomp" >/dev/null 2>&1 || continue
-            vers=$(dd if="$ipath" bs=512 skip=$((bnd / 512)) status=none 2>/dev/null \
-                | $decomp 2>/dev/null \
-                | cpio -t 2>/dev/null \
-                | grep '^lib/modules/[^/]' \
-                | sed "$MOD_SED" \
-                | sort -uV)
-            [ -n "$vers" ] && { printf '%s\n' "$vers"; return; }
-        done
-    done < <(grep -boa 'TRAILER!!!' "$ipath" 2>/dev/null)
+    local magic
+    magic=$(dd if="$ipath" bs=1 skip="$bnd" count=4 status=none 2>/dev/null \
+            | od -A n -t x1 | tr -d ' \n')
+
+    # gzip=1f8b  xz=fd377a58  lz4=04224d18  zstd=28b52ffd  bzip2=425a68  lzma=5d00
+    local -a decomp_cmd
+    case "$magic" in
+        1f8b*)    decomp_cmd=(zcat)                       ;;
+        fd377a58) decomp_cmd=(xzcat)                      ;;
+        04224d18) decomp_cmd=(lz4cat)                     ;;
+        28b52ffd) decomp_cmd=(zstdcat)                    ;;
+        425a68*)  decomp_cmd=(bzcat)                      ;;
+        5d00*)    decomp_cmd=(xz -d -c --format=lzma)     ;;
+        *) warn $"initrd %s: unrecognised compression (magic: %s)" \
+                 "$(pq "$(basename "$ipath")")" "$(pq "$magic")"
+           return ;;
+    esac
+
+    if ! command -v "${decomp_cmd[0]}" >/dev/null 2>&1; then
+        warn $"initrd %s: decompressor %s is not installed" \
+             "$(pq "$(basename "$ipath")")" "$(pq "${decomp_cmd[0]}")"
+        return
+    fi
+
+    dd if="$ipath" bs=512 skip=$((bnd / 512)) status=none 2>/dev/null \
+        | "${decomp_cmd[@]}" 2>/dev/null \
+        | cpio -t 2>/dev/null \
+        | grep '^lib/modules/[^/]' \
+        | sed "$MOD_SED" \
+        | sort -uV
 }
 
 #------------------------------------------------------------------------------
@@ -552,8 +565,6 @@ Options:
   -K --keep-old         Keep the old module directory in the initrd
   -m --modules=<list>   Only add listed modules to the existing initrd
   -N --numeric-ui       Use the legacy numerical user interface
-     --no-ucode         Skip microcode refresh in the repacked initrd
-  -U                    Same as --no-ucode
      --live-dir=<dir>   Subdir holding live boot files (normally "antiX"); skips auto-detection
      --multi-kernel     Force per-kernel initrd mode (one initrd per kernel slot)
      --shared-initrd    Force shared initrd mode (one initrd shared by vmlinuz + vmlinuz1)
@@ -561,6 +572,8 @@ Options:
   -p --pretend          Don't actually install the new kernel or initrd.gz
   -q --quiet            Print less
   -R --reset-config     Write a config template (all entries commented out) and exit
+  -e --encrypt          Add cryptsetup to programs copied into initrd
+  -U --no-ucode         Skip microcode refresh in the repacked initrd
   -v --version          Show version information
   -V --verbose          Print more, show output of commands
   -VV --very-verbose    Also show the commands
@@ -583,7 +596,6 @@ Usage
 eval_argument() {
     local arg=$1 val=$2
     case $arg in
-              -auto|a)  AUTO_MODE=true                  ;;
              -color|C)  COLOR_SCHEME=$val               ;;
              -color=*)  COLOR_SCHEME=$val               ;;
             -device|d)  DEVICE=$val                     ;;
@@ -601,6 +613,7 @@ eval_argument() {
            -modules|m)  MODS="$MODS${MODS:+,}$val"      ;;
            -modules=*)  MODS="$MODS${MODS:+,}$val"      ;;
        --numeric-ui|N)  GRAPHICAL_MENUS=                ;;
+           -encrypt|e)  CMD_ENCRYPT=true               ;;
           -no-ucode|U)  NO_UCODE=true                  ;;
            -pretend|p)  PRETEND_MODE=true ;             ;;
                -pause)  PAUSE="$PAUSE${PAUSE:+,}exit"   ;;
@@ -663,12 +676,30 @@ takes_param() {
 # The main routine.  Called from the very bottom of this script.
 #------------------------------------------------------------------------------
 main() {
-    local SHIFT SHORT_STACK="CdDFGhiIkKmNpqRUvVW"
+    local SHIFT SHORT_STACK="CdDeFGhiIkKmNpqRUvVW"
     local BE_VERBOSE VERY_VERBOSE VERBOSITY=0
     local orig_args="$*"
 
     # Bashism: put the original arguments into an array to deal w/ spaces
     declare -a ORIG_ARGS=("$@")
+
+    # Expand stacked short opts into individual flags so that offer_restart()
+    # can strip -d/--device reliably even when packed (e.g. -VVd /path).
+    declare -a UNPACKED_ARGS=()
+    local _ua _uc
+    for _ua in "${ORIG_ARGS[@]}"; do
+        case "$_ua" in
+            -[$SHORT_STACK][$SHORT_STACK]*)
+                if printf '%s\n' "${_ua#-}" | grep -q "^[$SHORT_STACK]\+$"; then
+                    for _uc in $(printf '%s' "${_ua#-}" | sed 's/./& /g'); do
+                        UNPACKED_ARGS+=("-$_uc")
+                    done
+                else
+                    UNPACKED_ARGS+=("$_ua")
+                fi ;;
+            *) UNPACKED_ARGS+=("$_ua") ;;
+        esac
+    done
 
     # Let non-root users get usage.  Need to get --ignore-config early.
     read_early_params "$@"
@@ -741,6 +772,29 @@ main() {
     mkdir -p $WORK_DIR || fatal 120 "Could not make a work directory under /run"
     mount -t tmpfs tmpfs $WORK_DIR || fatal 121 "Could not mount tmpfs at %s" $WORK_DIR
 
+    # toram: linuxfs copied to tmpfs, boot device unmounted -- remount it so
+    # its_alive_usb() can find it at LIVE_MP and live detection works normally
+    if its_alive && ! is_mountpoint "$LIVE_MP" \
+            && [ -f /run/initramfs/config/did-toram ]; then
+        local _toram_dev=$(cat /etc/live/config/boot-device 2>/dev/null)
+        if [ -b "$_toram_dev" ]; then
+            local _existing
+            _existing=$(findmnt -n -o TARGET --source "$_toram_dev" 2>/dev/null | head -1)
+            if [ -n "$_existing" ]; then
+                msg $"toram mode: boot device already mounted at %s" "$(pq $_existing)"
+                mount --bind "$_existing" "$LIVE_MP" && LKU_TORAM_MOUNT=true
+            else
+                msg $"toram mode: remounting boot device %s" "$(pq $_toram_dev)"
+                if mount "$_toram_dev" "$LIVE_MP"; then
+                    LKU_TORAM_MOUNT=true
+                else
+                    warn $"Could not remount boot device %s -- live detection may fail" \
+                         "$(pq $_toram_dev)"
+                fi
+            fi
+        fi
+    fi
+
     local we_are_live  live_dev  bios_uuid  bios_dev
     if its_alive_usb; then
         we_are_live=true
@@ -810,12 +864,22 @@ main() {
         fi
         [ "$dev_type" = "part" ] || fatal $"Device %s is not a disk partition" $usb_dev
 
-        local usb_drive=$(get_drive $usb_dev)
-        umount_all $usb_drive
-
-        my_mount $usb_dev $USB_DIR
+        # If device is already mounted (e.g. by GIO/Thunar), use that mount point
+        # directly -- do not unmount it, and do not unmount it on exit either
+        local existing_mp
+        existing_mp=$(findmnt -n -o TARGET --source "$usb_dev" 2>/dev/null | head -1)
+        if [ -n "$existing_mp" ]; then
+            live_mp=$existing_mp
+            LKU_DID_MOUNT=false
+            msg $"Will use already-mounted device %s at %s" "$(pq $usb_dev)" "$(pq $live_mp)"
+        else
+            local usb_drive=$(get_drive $usb_dev)
+            umount_all $usb_drive
+            my_mount $usb_dev $USB_DIR
+            LKU_DID_MOUNT=true
+            live_mp=$USB_DIR
+        fi
         msg $"Will use live-usb device %s" "$(pq $usb_dev)"
-        live_mp=$USB_DIR
 
         local crypt_file=$live_mp/$LIVE_DIR/$CRYPT_FNAME
         if test -e $crypt_file; then
@@ -1357,7 +1421,7 @@ $(printf "${m_co}%s: %s${nc_co}" "$_lbl_mods" "$(pq "$MODS")")"
                 [ "$_fn" = "$target_fname" ] && continue
                 [ "$_ver" = "$_running_ver" ] && _safe=true && break
             done <<< "$live_vm"
-            if [ -z "$_safe" ]; then
+            if [ -z "$_safe" ] && [ $(count_lines "$live_vm") -gt 1 ]; then
                 local _wfmt
                 [ "$action" = "remove" ] \
                     && _wfmt=$"You are about to remove the currently running live kernel %s" \
@@ -1724,7 +1788,12 @@ select_new_kernel() {
     fi
 
     case $cnt in
-        1)  msg $"Found one new kernel %s" "$(pq $(get_kernel_version $list))"
+        1)  local _auto_ver=$(get_kernel_version "$list")
+            if [ "$_auto_ver" = "$current_version" ]; then
+                msg $"Found one kernel %s" "$(pq $_auto_ver)"
+            else
+                msg $"Found one new kernel %s" "$(pq $_auto_ver)"
+            fi
             eval "$var=\$list"
             return ;;
     esac
@@ -1812,7 +1881,7 @@ copy_modules() {
 copy_programs() {
     local from=$1  to=$2  prog=${3:-copy-initrd-programs}
     local encrypt_option=""
-    if [ "$IS_ENCRYPTED" = true ]; then
+    if [ "$IS_ENCRYPTED" = true ] || [ "$CMD_ENCRYPT" = true ]; then
         encrypt_option="--encrypt"
     fi
     need_prog $prog
@@ -1970,7 +2039,7 @@ offer_restart() {
         # Replay original args minus any --device/-d, then add confirmed device.
         # This preserves --shared-initrd, --multi-kernel, -VV, etc. across restarts.
         local args=() arg skip_next=false
-        for arg in "${ORIG_ARGS[@]}"; do
+        for arg in "${UNPACKED_ARGS[@]}"; do
             if $skip_next; then skip_next=false; continue; fi
             case "$arg" in
                 --device=*|-d?*) continue ;;
@@ -2056,8 +2125,16 @@ my_exit() {
 # the lock file.
 #------------------------------------------------------------------------------
 clean_up() {
+    sync
     lib_clean_up
-    mp_cleanup $SQFS_DIR $USB_DIR $BIOS_DIR $WORK_DIR
+    # Only unmount USB_DIR if we mounted it ourselves; leave GIO/external mounts alone
+    if [ "${LKU_DID_MOUNT:-true}" = true ]; then
+        mp_cleanup $SQFS_DIR $USB_DIR $BIOS_DIR $WORK_DIR
+    else
+        mp_cleanup $SQFS_DIR $BIOS_DIR $WORK_DIR
+    fi
+    # toram: unmount LIVE_MP if we remounted it -- restore pre-lku state
+    [ "$LKU_TORAM_MOUNT" = true ] && umount "$LIVE_MP" 2>/dev/null
     test -d $WORK_DIR && rmdir $WORK_DIR
     luks_close $LUKS_NAME
     unflock
@@ -2145,6 +2222,20 @@ load_lib() {
 
 #===== Start Here =============================================================
 load_lib "$SHELL_LIB" "$LIB_PATH"
+
+# Override lib do_defrag: defrag kernels and initrds only -- skip .md5/.ver files
+do_defrag() {
+    local iso_dir=$1  prog=e4defrag  opts="-v"
+    if ! which $prog &>/dev/null; then
+        warn $"Could not find program %s.  Not defragmenting." $prog
+        return
+    fi
+    local files
+    files=$(find "${iso_dir%/}" -maxdepth 1 \
+        \( -name "vmlinuz" -o -name "vmlinuz[0-9]" \
+        -o -name "initrd.gz" -o -name "initrd[0-9].gz" \) 2>/dev/null)
+    [ -n "$files" ] && cmd $prog $opts $files
+}
 
 set_colors
 
