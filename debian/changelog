@@ -1,3 +1,31 @@
+live-kernel-updater (0.2.30+15) mx; urgency=medium
+
+  * Fix LUKS live-usb detection
+  * Fix partition probe for LUKS live-usb when a disk device is given
+  * Fix mount --move failing on systemd hosts (all mounts are shared by
+    default, which prohibits moving them): replace with plain umount +
+    remount when LKU owns the mount, or bind-mount when the device is
+    already mounted by an automounter (GIO/Thunar/KDE Plasma)
+  * Reuse already-opened LUKS mapper on external LUKS USB: detect an
+    existing crypt-type child via lsblk and use /dev/mapper/NAME directly
+    instead of calling cryptsetup open (which would fail on an already-
+    opened device)
+  * Reuse already-mounted LUKS device on external LUKS USB: detect via
+    findmnt and bind-mount to USB_DIR; set LKU_DID_MOUNT=true in all LUKS
+    paths so mp_cleanup always tears down the mount on exit
+  * Fix initrd rebuild on LUKS live-usb: copy_programs() now writes
+    etc/encrypt into the initrd work directory when IS_ENCRYPTED=true
+    or --encrypt is given, so the rebuilt initrd activates LUKS at boot
+  * Fix disk-device partition probe: replace first-with-FSTYPE heuristic
+    with a mount-and-probe loop that skips BIOS-boot (no FSTYPE), ESP
+    (vfat), crypto_LUKS, and swap partitions, mounts each remaining
+    candidate, and verifies live content with find_live_boot_dir; handles
+    any partition layout including leading data partitions and ESP at any
+    position
+  * Version string: 26.05.3
+
+ -- fehlix <fehlix@mxlinux.org>  Thu, 21 May 2026 19:58:13 -0400
+
 live-kernel-updater (0.2.30+14) mx; urgency=medium
 
   * Add -e/--encrypt flag to force cryptsetup into initrd regardless of
