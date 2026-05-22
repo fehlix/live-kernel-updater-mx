@@ -13,8 +13,8 @@
 #      VERSION="2.30.04-2302"
 # VERSION_DATE="Sat, 25 Feb 2023 12:45:10 -0500"
 
-      VERSION="26.05.2"
- VERSION_DATE="Thu, 21 May 2026 07:37:17 -0400"
+      VERSION="26.05.3"
+ VERSION_DATE="Thu, 21 May 2026 19:58:13 -0400"
 
         ME="live-kernel-updater"
     MY_DIR=$(dirname "$(readlink -f $0)")
@@ -852,15 +852,34 @@ main() {
 
         local dev_type=$(lsblk -no TYPE --nodeps $usb_dev)
 
-        # Allow user to specify disk device instead of partition
+        # Allow user to specify disk device instead of partition.
+        # Try each mountable partition in order; use the first that contains
+        # a live boot directory.  Skips BIOS-boot (no FSTYPE), ESP/vfat, and
+        # crypto_LUKS partitions.  Handles any partition layout -- leading data
+        # partitions, ESP at any position, etc.
         if [ "$dev_type" = "disk"  ]; then
-            local part_dev=$(get_partition $usb_dev 1)
-            dev_type=$(lsblk -no TYPE --nodeps $part_dev)
-            if [ "$dev_type" = "part" ]; then
-                usb_dev=$part_dev
-            else
-                fatal $"Can't find first partition on device %s" $usb_dev
-            fi
+            local part_dev _pname _ptype _pfstype _found_part
+            while read _pname _ptype _pfstype; do
+                [ "$_ptype"   = "part"        ] || continue
+                [ -n "$_pfstype"              ] || continue  # skip BIOS boot (no FSTYPE)
+                [ "$_pfstype" = "vfat"        ] && continue  # skip ESP
+                [ "$_pfstype" = "crypto_LUKS" ] && continue  # skip LUKS container
+                [ "$_pfstype" = "swap"        ] && continue
+                part_dev=/dev/$_pname
+                my_mount "$part_dev" "$USB_DIR" 2>/dev/null || continue
+                if find_live_boot_dir _found_part "$USB_DIR" "$LINUXFS_NAME" \
+                        2>/dev/null \
+                   || test -e "$USB_DIR/$LIVE_DIR/encrypted" \
+                   || test -e "$USB_DIR/$LIVE_DIR/$CRYPT_FNAME"; then
+                    umount "$USB_DIR" 2>/dev/null
+                    break
+                fi
+                umount "$USB_DIR" 2>/dev/null
+                part_dev=""
+            done < <(lsblk -nlo NAME,TYPE,FSTYPE "$usb_dev" 2>/dev/null)
+            fatal_z "$part_dev" $"Could not find a live boot partition on device %s" "$usb_dev"
+            dev_type="part"
+            usb_dev=$part_dev
         fi
         [ "$dev_type" = "part" ] || fatal $"Device %s is not a disk partition" $usb_dev
 
@@ -881,29 +900,68 @@ main() {
         fi
         msg $"Will use live-usb device %s" "$(pq $usb_dev)"
 
+        # Check for encrypted live-usb: "crypt" (old layout -- live files inside
+        # LUKS container) or "encrypted" (new layout -- live files on BIOS ext4
+        # partition, LUKS container holds persistence only).
         local crypt_file=$live_mp/$LIVE_DIR/$CRYPT_FNAME
-        if test -e $crypt_file; then
+        local encrypt_marker=$live_mp/$LIVE_DIR/encrypted
+        if test -e "$crypt_file" || test -e "$encrypt_marker"; then
+            local _marker_file
+            test -e "$crypt_file" && _marker_file=$crypt_file || _marker_file=$encrypt_marker
+
             shout "Encrypted live-usb detected"
-            local main_uuid=$(cat $crypt_file 2>/dev/null)
+            local main_uuid=$(cat "$_marker_file" 2>/dev/null)
 
             my_mkdir $BIOS_DIR
-            always_cmd mount --move $live_mp $BIOS_DIR || fatal "Could not move mount to %s" $(basename $BIOS_DIR)
+            if [ "$LKU_DID_MOUNT" = true ]; then
+                # We own the mount -- unmount from USB_DIR and remount to BIOS_DIR.
+                # mount --move fails on shared mounts (systemd default), so avoid it.
+                cmd umount "$live_mp"
+                always_cmd mount "$usb_dev" $BIOS_DIR \
+                    || fatal "Could not mount to %s" $(basename $BIOS_DIR)
+            else
+                # External mount (e.g. GIO/Thunar) -- bind-mount to BIOS_DIR so
+                # we do not disturb the automounter's mount point.
+                always_cmd mount --bind "$live_mp" $BIOS_DIR \
+                    || fatal "Could not bind-mount to %s" $(basename $BIOS_DIR)
+            fi
 
             fatal_z "$main_uuid" "Could not find uuid of encrypted partition"
 
             local main_dev=$(blkid -U "$main_uuid")
             echo "main uuid: $main_uuid  main dev: $main_dev" >> $LOG_FILE
 
-            fatal_z "$main_dev" "Could not find encrypted partition with uuid %s" "$boot_uuid"
+            fatal_z "$main_dev" "Could not find encrypted partition with uuid %s" "$main_uuid"
 
-            shout "When asked, please enter the password for this encrypted live-usb"
-            LUKS_DEV=/dev/mapper/$LUKS_NAME
+            # Reuse an already-opened LUKS mapper (e.g. opened by GIO/Thunar)
+            # rather than trying to open the same device again.
+            local existing_mapper
+            existing_mapper=$(lsblk -nlo NAME,TYPE "$main_dev" 2>/dev/null \
+                | awk '$2=="crypt" {print $1; exit}')
+            if [ -n "$existing_mapper" ]; then
+                LUKS_DEV=/dev/mapper/$existing_mapper
+                msg $"Using already-opened LUKS device %s" "$(pq $existing_mapper)"
+            else
+                shout "When asked, please enter the password for this encrypted live-usb"
+                LUKS_DEV=/dev/mapper/$LUKS_NAME
+                always_cmd cryptsetup open --type=luks $main_dev $LUKS_NAME \
+                    || fatal "Was unable to open the encrypted partition"
+            fi
 
-            always_cmd cryptsetup open --type=luks $main_dev $LUKS_NAME \
-                || fatal "Was unable to open the encrypted partition"
-
-            always_cmd mount $LUKS_DEV $live_mp || fatal "Was unable to mount the encrypted device"
-
+            # Reuse an already-mounted LUKS device (bind-mount to USB_DIR so
+            # cleanup is consistent); otherwise mount it fresh.
+            local luks_mp
+            luks_mp=$(findmnt -n -o TARGET --source "$LUKS_DEV" 2>/dev/null | head -1)
+            if [ -n "$luks_mp" ]; then
+                msg $"Using already-mounted LUKS device at %s" "$(pq $luks_mp)"
+                always_cmd mount --bind "$luks_mp" $USB_DIR \
+                    || fatal "Was unable to bind-mount LUKS device"
+            else
+                always_cmd mount $LUKS_DEV $USB_DIR \
+                    || fatal "Was unable to mount the encrypted device"
+            fi
+            live_mp=$USB_DIR
+            LKU_DID_MOUNT=true
             IS_ENCRYPTED=true
         fi
 
@@ -1887,6 +1945,11 @@ copy_programs() {
     need_prog $prog
     cmd $prog --from="$from" --to="$to" $encrypt_option --clean
     cmd $prog --from="$from" --to="$to" $encrypt_option
+    if [ -n "$encrypt_option" ]; then
+        mkdir -p "$to/etc"
+        printf 'enable\n' > "$to/etc/encrypt"
+        msg $"Added %s to initrd" "$(pq etc/encrypt)"
+    fi
 }
 
 #------------------------------------------------------------------------------

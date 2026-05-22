@@ -1,4 +1,4 @@
-.TH LIVE-KERNEL-UPDATER 1 "2026-05-21" "Version 26.05.2" "antiX/MX Documentation"
+.TH LIVE-KERNEL-UPDATER 1 "2026-05-21" "Version 26.05.3" "antiX/MX Documentation"
 .nh
 .ad l
 .SH NAME
@@ -161,9 +161,6 @@ Force multi\-kernel mode.  Auto\-detected as the default on MX Linux.
 \fB\-N\fR, \fB\-\-numeric\-ui\fR
 Use the legacy numbered\-list menu interface instead of the interactive one.
 .TP
-\fB\-U\fR, \fB\-\-no\-ucode\fR
-Skip microcode injection when repacking the initrd.
-.TP
 \fB\-p\fR, \fB\-\-pretend\fR
 Dry\-run mode.  Show what would be done without writing any files.
 .TP
@@ -177,6 +174,9 @@ Useful as a starting point for customisation.
 \fB\-\-shared\-initrd\fR
 Force shared\-initrd mode.  Used as the default when multi\-kernel mode
 is not auto\-detected.
+.TP
+\fB\-U\fR, \fB\-\-no\-ucode\fR
+Skip microcode injection when repacking the initrd.
 .TP
 \fB\-v\fR, \fB\-\-version\fR
 Show version information and exit.
