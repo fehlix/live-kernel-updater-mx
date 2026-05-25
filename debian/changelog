@@ -1,3 +1,28 @@
+live-kernel-updater (0.2.30+16) mx; urgency=medium
+
+  * Fix stale-slot false positive when a kernel was purged in the current
+    live session: stale_vm is now computed from the unfiltered squashfs
+    boot_all before the session-filtering step; previously filtering removed
+    the purged version from boot_all first, causing stale_vm to wrongly mark
+    the corresponding live slot with '?' even without persistence
+  * Hide session-purged kernels from the add/update selection on any live-
+    boot run (with or without persistence): kernels removed from the running
+    /boot overlay in the current session are filtered out of the selectable
+    pool so they cannot be offered as add/update candidates
+  * Mark live slots as questionable ('?') when the slot's kernel was purged
+    under root persistence: persist_removed_vm detects slots whose kernel
+    exists in the squashfs but is absent from the running /boot overlay,
+    and adds the '?' warning to those slots in the action menu
+  * Replace fatal root-check error with sudo re-exec: instead of aborting
+    with "must be run as root", non-root invocations now re-execute the
+    script via 'sudo -k' (forcing a fresh password prompt, no cached
+    credentials reused)
+  * Add 'Legend:' header above the '*'/'?' marker lines in the action menu
+    so they are clearly identified as a key and not part of the kernel list;
+    remove redundant '*' marker line from kernel selection sub-screen
+
+ -- fehlix <fehlix@mxlinux.org>  Mon, 25 May 2026 19:11:41 -0400
+
 live-kernel-updater (0.2.30+15) mx; urgency=medium
 
   * Fix LUKS live-usb detection

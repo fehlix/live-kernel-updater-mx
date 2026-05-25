@@ -13,8 +13,8 @@
 #      VERSION="2.30.04-2302"
 # VERSION_DATE="Sat, 25 Feb 2023 12:45:10 -0500"
 
-      VERSION="26.05.3"
- VERSION_DATE="Thu, 21 May 2026 19:58:13 -0400"
+      VERSION="26.05.4"
+ VERSION_DATE="Mon, 25 May 2026 19:11:41 -0400"
 
         ME="live-kernel-updater"
     MY_DIR=$(dirname "$(readlink -f $0)")
@@ -548,6 +548,7 @@ Options:
   -C --color=<xxx>      Set color scheme to off|low|low1|bw|dark|high
   -d --device=<device>  live-usb device to update the kernel on
                         (use "live" to force updating a running live system)
+  -e --encrypt          Add cryptsetup to programs copied into initrd
   -F --force=XXXX       Force the options specfied:
                              flock:  ignore missing flock program
                                usb:  Allow non-usb devices (dangerous!)
@@ -572,7 +573,6 @@ Options:
   -p --pretend          Don't actually install the new kernel or initrd.gz
   -q --quiet            Print less
   -R --reset-config     Write a config template (all entries commented out) and exit
-  -e --encrypt          Add cryptsetup to programs copied into initrd
   -U --no-ucode         Skip microcode refresh in the repacked initrd
   -v --version          Show version information
   -V --verbose          Print more, show output of commands
@@ -704,7 +704,10 @@ main() {
     # Let non-root users get usage.  Need to get --ignore-config early.
     read_early_params "$@"
 
-    need_root
+    if [ $(id -u) -ne 0 ]; then
+        exec sudo -k "$0" "$@"
+        need_root
+    fi
 
     EXIT_NUM=100
 
@@ -1125,11 +1128,25 @@ main() {
     local live_old_cnt=$(count_lines "$live_old")
     local action_cnt=$((new_cnt + live_old_cnt))
 
+    # Slots holding kernels no longer available in the (possibly remastered) squashfs.
+    # Must be computed from the unfiltered squashfs boot_all, before any session-based
+    # filtering is applied below.
+    local stale_vm="" stale_cnt=0
+    if [ -n "$boot_all" ]; then
+        local boot_versions=$(get_kernel_version "$boot_all" | tr "\n" "|" | sed 's/+/[+]/g')
+        boot_versions=${boot_versions%|}
+        if [ -n "$boot_versions" ]; then
+            stale_vm=$(find_kernel_version "$boot_versions" "$live_vm" -v) || true
+        fi
+        stale_cnt=$(count_lines "$stale_vm")
+    fi
+
     # In live-boot mode, running /boot may have kernels installed on the overlay that
     # are not yet in the squashfs.  They need a remaster before lku can use them.
     # Skip when working with linuxfs.new: remaster already done, overlay check is irrelevant.
     local overlay_new="" overlay_cnt=0
     local real_boot_all=""
+    local real_versions=""
     if update_live && [ -z "$live_remaster" ]; then
         get_all_kernel real_boot_all "/boot"
         real_boot_all=$(sed /memtest/Id <<<"$real_boot_all")
@@ -1143,25 +1160,29 @@ main() {
             overlay_new="$real_boot_all"
         fi
         overlay_cnt=$(count_lines "$overlay_new")
-    fi
 
-    # Slots holding kernels no longer available in the (possibly remastered) squashfs
-    local stale_vm="" stale_cnt=0
-    if [ -n "$boot_all" ]; then
-        local boot_versions=$(get_kernel_version "$boot_all" | tr "\n" "|" | sed 's/+/[+]/g')
-        boot_versions=${boot_versions%|}
-        if [ -n "$boot_versions" ]; then
-            stale_vm=$(find_kernel_version "$boot_versions" "$live_vm" -v) || true
+        # Filter kernels removed from running /boot out of the selectable pool.
+        # Applies on any live-boot run (with or without persistence): the user
+        # removed the kernel in this session so it should not appear as an option.
+        real_versions=$(get_kernel_version "$real_boot_all" | tr "\n" "|" | sed 's/+/[+]/g')
+        real_versions=${real_versions%|}
+        if [ -n "$real_versions" ]; then
+            local _prv=$(find_kernel_version "$real_versions" "$boot_all" -v \
+                | cut -d"$K_IFS" -f1 | tr "\n" "|" | sed 's/+/[+]/g')
+            _prv=${_prv%|}
+            if [ -n "$_prv" ]; then
+                boot_all=$(find_kernel_version "$_prv" "$boot_all" -v) || true
+                boot_new=$(find_kernel_version "$live_versions" "$boot_all" -v)
+                new_cnt=$(count_lines "$boot_new")
+                action_cnt=$((new_cnt + live_old_cnt))
+            fi
         fi
-        stale_cnt=$(count_lines "$stale_vm")
     fi
 
     # Slots whose kernel exists in squashfs but was removed from the persistence overlay
     # (in squashfs /boot but not in running /boot -- may fail to boot with persistence)
     local persist_removed_vm="" persist_removed_cnt=0
     if live_persist && [ -n "$real_boot_all" ]; then
-        local real_versions=$(get_kernel_version "$real_boot_all" | tr "\n" "|" | sed 's/+/[+]/g')
-        real_versions=${real_versions%|}
         if [ -n "$real_versions" ]; then
             persist_removed_vm=$(find_kernel_version "$real_versions" "$live_vm" -v) || true
         else
@@ -1692,9 +1713,12 @@ select_update_rollback_action() {
         local _rv=$(uname -r)
         local _lbl_run=$"running live kernel"
         local _lbl_persist=$"kernel uninstalled under persistence - may not boot"
+        local _lbl_legend=$"Legend:"
+        msg ""
+        msg "${m_co}${_lbl_legend}${nc_co}"
         msg "${hi_co}*${nc_co} ${version_co}${_rv}${nc_co}  ${m_co}${_lbl_run}${nc_co}"
         live_persist \
-            && msg "${warn_co}?${nc_co}  ${m_co}${_lbl_persist}${nc_co}"
+            && msg "${warn_co}? ${_lbl_persist}${nc_co}"
     fi
     local BACK_TO_MAIN=$"quit"
     my_select $var $"Please select an action to perform" "$menu"
@@ -1858,7 +1882,6 @@ select_new_kernel() {
 
     local BACK_TO_MAIN=$"quit"
     if [ -n "$current_version" ]; then
-        msg "${hi_co}*${nc_co} ${version_co}${current_version}${nc_co}  ${m_co}${current_label}${nc_co}"
         select_kernel_2_marked $"Please select a kernel from this list" $var "$list" "$current_version"
     else
         select_kernel_2 $"Please select a kernel from this list" $var "$list"
