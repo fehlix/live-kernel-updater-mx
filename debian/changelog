@@ -19,10 +19,17 @@ live-kernel-updater (0.2.30+16) mx; urgency=medium
     credentials reused)
   * Add 'Legend:' header above the '*'/'?' marker lines in the action menu
     so they are clearly identified as a key and not part of the kernel list;
-    remove redundant '*' marker line from kernel selection sub-screen
+    reduce spacing after '?' from two spaces to one to align with '*' line;
+    remove redundant '*' marker line from kernel selection sub-screen (it was
+    shown without the Legend header and is already visible inline in the list);
+    suppress legend entirely when no markers are relevant: '*' only shown when
+    there are at least two distinct kernel versions across live slots (marking
+    identical versions in multiple slots adds no information), '?' only when
+    at least one slot is flagged; with a single kernel version the legend is
+    never shown
   * Version string: 26.05.4
 
- -- fehlix <fehlix@mxlinux.org>  Mon, 25 May 2026 19:11:41 -0400
+ -- fehlix <fehlix@mxlinux.org>  Tue, 26 May 2026 12:03:43 -0400
 
 live-kernel-updater (0.2.30+15) mx; urgency=medium
 

@@ -13,8 +13,8 @@
 #      VERSION="2.30.04-2302"
 # VERSION_DATE="Sat, 25 Feb 2023 12:45:10 -0500"
 
-      VERSION="26.05.4"
- VERSION_DATE="Mon, 25 May 2026 19:11:41 -0400"
+      VERSION="26.05.3"
+ VERSION_DATE="Thu, 21 May 2026 19:58:13 -0400"
 
         ME="live-kernel-updater"
     MY_DIR=$(dirname "$(readlink -f $0)")
@@ -1711,14 +1711,25 @@ select_update_rollback_action() {
 
     if update_live; then
         local _rv=$(uname -r)
-        local _lbl_run=$"running live kernel"
-        local _lbl_persist=$"kernel uninstalled under persistence - may not boot"
-        local _lbl_legend=$"Legend:"
-        msg ""
-        msg "${m_co}${_lbl_legend}${nc_co}"
-        msg "${hi_co}*${nc_co} ${version_co}${_rv}${nc_co}  ${m_co}${_lbl_run}${nc_co}"
-        live_persist \
-            && msg "${warn_co}? ${_lbl_persist}${nc_co}"
+        local _show_star="" _show_q=""
+        local _ver _fname _date
+        if [ "$(get_kernel_version "${2}" | sort -u | wc -l)" -gt 1 ]; then
+            while IFS="$K_IFS" read -r _ver _fname _date; do
+                [ "$_ver" = "$_rv" ] && { _show_star=1; break; }
+            done <<< "${2}"
+        fi
+        { [ "$stale_cnt" -gt 0 ] || [ "$persist_removed_cnt" -gt 0 ]; } && _show_q=1
+        if [ -n "$_show_star" ] || [ -n "$_show_q" ]; then
+            local _lbl_legend=$"Legend:"
+            local _lbl_run=$"running live kernel"
+            local _lbl_persist=$"kernel uninstalled under persistence - may not boot"
+            msg ""
+            msg "${m_co}${_lbl_legend}${nc_co}"
+            [ -n "$_show_star" ] \
+                && msg "${hi_co}*${nc_co} ${version_co}${_rv}${nc_co}  ${m_co}${_lbl_run}${nc_co}"
+            [ -n "$_show_q" ] \
+                && msg "${warn_co}? ${_lbl_persist}${nc_co}"
+        fi
     fi
     local BACK_TO_MAIN=$"quit"
     my_select $var $"Please select an action to perform" "$menu"
@@ -1744,7 +1755,8 @@ make_update_menu() {
     local IFS=$K_IFS
 
     local running_ver=""
-    update_live && running_ver=$(uname -r)
+    local _uniq_ver_cnt=$(get_kernel_version "$live_vm" | sort -u | wc -l)
+    update_live && [ "$_uniq_ver_cnt" -gt 1 ] && running_ver=$(uname -r)
 
     # FIXME: go through twice to get widths?
     local fmt="%s$bold_co %s$m_co %s %s ($date_co%s$nc_co)%s"
